@@ -39,7 +39,7 @@ joined #testing-channel.
 """
 
 # =========================================
-# 2) Extract This User's Lines
+# 2) Basic Helper Functions
 # =========================================
 def get_user_messages(slack_lines, user_name="Nassir Mohamud"):
     user_messages = []
@@ -48,20 +48,12 @@ def get_user_messages(slack_lines, user_name="Nassir Mohamud"):
             user_messages.append(line)
     return user_messages
 
-lines = slack_text.strip().split('\n')
-nassir_messages = get_user_messages(lines, user_name="Nassir Mohamud")
-
-
-# =========================================
-# 3) Sentiment Analysis (Hugging Face)
-# =========================================
 @st.cache_resource
 def load_sentiment_pipeline():
     return pipeline("sentiment-analysis")
 
-sentiment_pipeline = load_sentiment_pipeline()
-
 def get_user_sentiment_score(user_messages):
+    """Compute average sentiment score (1 for positive, -1 for negative)."""
     if not user_messages:
         return 0
     sentiment_sum = 0
@@ -78,13 +70,9 @@ def get_user_sentiment_score(user_messages):
         return 0
     return sentiment_sum / total_messages
 
-nassir_sentiment_score = get_user_sentiment_score(nassir_messages)
-
-
-# =========================================
-# 4) Engagement Check
-# =========================================
 def get_user_engagement_rate(slack_lines, user_name="Nassir Mohamud"):
+    """Count /going, /not-going, /maybe lines by that user, 
+       then compute (commands typed / total lines)."""
     going_count = 0
     not_going_count = 0
     maybe_count = 0
@@ -113,63 +101,70 @@ def get_user_engagement_rate(slack_lines, user_name="Nassir Mohamud"):
         "rate": engagement_rate
     }
 
-nassir_engagement = get_user_engagement_rate(lines, "Nassir Mohamud")
-
-
-# =========================================
-# 5) Drop-Off Heuristic
-# =========================================
-def single_user_dropoff_chance(
-    sentiment_score,
-    engagement_info,
-    negative_sent_weight=0.5,
-    low_engagement_weight=0.5
-):
-    # Sentiment
+def single_user_dropoff_chance(sentiment_score, engagement_info,
+                               negative_sent_weight=0.5,
+                               low_engagement_weight=0.5):
+    """Heuristic: Weighted average of negative sentiment and (1 - engagement)."""
     sentiment_component = 0
     if sentiment_score < 0:
         sentiment_component = min(abs(sentiment_score) * 100, 100)
-
-    # Engagement
     user_rate = engagement_info["rate"]
     engagement_component = (1 - user_rate) * 100
 
-    # Weighted average
     dropoff_chance = (negative_sent_weight * sentiment_component) + \
                      (low_engagement_weight * engagement_component)
-    # Cap at 100
     dropoff_chance = min(dropoff_chance, 100)
     return dropoff_chance
 
-nassir_dropoff = single_user_dropoff_chance(nassir_sentiment_score, nassir_engagement)
-
 
 # =========================================
-# 6) Streamlit App UI
+# 3) Streamlit App
 # =========================================
-st.title("Slack Drop-Off Analysis")
+st.title("Slack Drop-Off Analysis (Dynamic Username)")
 
-user_name = "Nassir Mohamud"
-st.subheader(f"Results for {user_name}")
+# Split the slack text into lines once, at the start
+lines = slack_text.strip().split('\n')
 
-st.write(f"**Average Sentiment Score**: {nassir_sentiment_score:.2f}")
-st.write(f"**Engagement Info**: {nassir_engagement}")
-st.write(f"**Estimated Drop-Off Chance**: {nassir_dropoff:.2f}%")
+# Load the sentiment pipeline once
+sentiment_pipeline = load_sentiment_pipeline()
 
-# Explanation
-manual_explanation = f"""
-**Estimated Drop-Off Chance** = {nassir_dropoff:.2f}%
+# Create a text input for the username
+user_input = st.text_input("Enter a Slack username:", "Nassir Mohamud")
 
-We are using a 50–50 weighting between **negative sentiment** and **(1 - engagement rate)**.
-- {user_name}'s sentiment is {"positive" if nassir_sentiment_score >= 0 else "negative"}, so that contributes less or zero to drop-off if it's positive.
-- Engagement rate is {nassir_engagement["rate"]:.2f}, so from the engagement perspective, 0 means a potential 100% drop-off.
+# Button to run the analysis
+if st.button("Analyze"):
+    # 1) Gather messages for that user
+    user_messages = get_user_messages(lines, user_name=user_input)
 
-Hence, we combine those two factors for the final drop-off chance.
-"""
+    # 2) Compute sentiment
+    user_sentiment = get_user_sentiment_score(user_messages)
 
-st.write("**Explanation**:")
-st.write(manual_explanation)
+    # 3) Compute engagement
+    user_engagement = get_user_engagement_rate(lines, user_name=user_input)
+
+    # 4) Drop-Off
+    user_dropoff = single_user_dropoff_chance(user_sentiment, user_engagement)
+
+    # 5) Display results
+    st.subheader(f"Results for {user_input}")
+    st.write(f"**Average Sentiment Score**: {user_sentiment:.2f}")
+    st.write(f"**Engagement Info**: {user_engagement}")
+    st.write(f"**Estimated Drop-Off Chance**: {user_dropoff:.2f}%")
+
+    # Explanation
+    explanation = f"""
+    **Estimated Drop-Off Chance** = {user_dropoff:.2f}%
+
+    We are using a 50–50 weighting between **negative sentiment** and **(1 - engagement rate)**.
+    - {user_input}'s sentiment is {"positive" if user_sentiment >= 0 else "negative"}, 
+      so that contributes less or zero to drop-off if it's positive.
+    - Engagement rate is {user_engagement["rate"]:.2f}, so from the engagement perspective,
+      0 means a potential 100% drop-off.
+
+    Hence, we combine those two factors for the final drop-off chance.
+    """
+    st.write("**Explanation**:")
+    st.write(explanation)
 
 st.write("---")
-st.write("*Thank you for using the app!*")
-
+st.write("*Use the text box above to type any username from the Slack text. Then click 'Analyze'.*")
