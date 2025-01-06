@@ -10,8 +10,6 @@ import re
 # =========================================
 # 1) Slack Text (Raw) - Example
 # =========================================
-# We'll assume some naive time format. In real Slack exports, you might have
-# "YYYY-MM-DD HH:MM:SS" or a different format. 
 slack_text = """
 Jharad 2025-01-01 09:27
 I love testing things out! I love college football and college basketball, but in general, I love college sports!
@@ -45,7 +43,7 @@ Are you guys free for a call later?
 # =========================================
 def parse_slack_lines(slack_text):
     """
-    Splits text into lines. 
+    Splits text into lines.
     """
     return slack_text.strip().split('\n')
 
@@ -54,14 +52,11 @@ def extract_user_and_datetime(line):
     Naive attempt to parse "Username YYYY-MM-DD HH:MM" from each line.
     Returns (user_name, datetime_object) or (None, None) if it fails.
     """
-    # Regex to capture patterns like: "Name 2025-01-06 09:49"
-    # This will be naive for demonstration.
     pattern = r"^(.*)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})$"
     match = re.match(pattern, line.strip())
     if match:
         user_part = match.group(1).strip()
         datetime_part = match.group(2).strip()
-        # Convert datetime_part to datetime object
         try:
             dt_obj = datetime.strptime(datetime_part, "%Y-%m-%d %H:%M")
             return user_part, dt_obj
@@ -101,7 +96,6 @@ def get_user_messages(lines):
             current_user = user
             current_dt = dt_obj
         else:
-            # It's just text from the current user
             buffer_text.append(line)
 
     # End of lines, if something is left in buffer
@@ -116,12 +110,11 @@ def get_user_messages(lines):
 
 @st.cache_resource
 def load_sentiment_pipeline():
-    # Load a sentiment pipeline
     return pipeline("sentiment-analysis")
 
 def classify_message_types(text):
     """
-    Return how many lines are questions vs. statements.
+    Returns how many lines are questions vs. statements.
     For demonstration, we do a simple check:
        - If a line ends in '?', it's a question.
        - Otherwise, it's a statement.
@@ -133,8 +126,8 @@ def classify_message_types(text):
 
 def compute_sentiment(text, sentiment_pipeline):
     """
-    For demonstration, we average the sentiment scores of each line.
-    If line label=POSITIVE => +score, if NEGATIVE => -score. 
+    We average the sentiment scores of each line.
+    If line label=POSITIVE => +score, if NEGATIVE => -score.
     """
     lines = text.split('\n')
     if not lines:
@@ -147,39 +140,34 @@ def compute_sentiment(text, sentiment_pipeline):
             scores.append(result['score'])
         else:
             scores.append(-result['score'])
-    if len(scores) == 0:
+    if not scores:
         return 0.0
     return np.mean(scores)
 
-
 def days_since(date_obj, reference_date):
-    """
-    Return how many days between reference_date and date_obj
-    """
+    """Return how many days between reference_date and date_obj."""
     delta = reference_date - date_obj
     return delta.days
 
 # =========================================
-# 3) Build the feature dataset
+# 3) Build Feature Data
 # =========================================
 def build_feature_data(user_messages, sentiment_pipeline):
     """
-    For each user, we want to compute:
-       - total_messages_in_period
+    For each user, we compute:
+       - total_messages
        - days_since_last_message
        - total_questions
        - total_statements
        - average_sentiment
-       - label: drop_off (mocked or from real data)
+       - drop_off (mocked)
     """
-    # group messages by user
     from collections import defaultdict
     user_data = defaultdict(list)
     for msg_dict in user_messages:
         user_data[msg_dict['user']].append(msg_dict)
     
-    # For demonstration, let's pick an arbitrary reference date 
-    # (the "end" of data or "today"). E.g., the last message's date or now:
+    # The reference date is the last message's date (treated as 'today')
     reference_date = max([m['datetime'] for m in user_messages]) if user_messages else datetime.now()
 
     rows = []
@@ -188,12 +176,9 @@ def build_feature_data(user_messages, sentiment_pipeline):
         msgs_sorted = sorted(msgs, key=lambda x: x['datetime'])
         
         total_msgs = len(msgs_sorted)
-        
-        # last message date
         last_msg_date = msgs_sorted[-1]['datetime']
         gap_days = days_since(last_msg_date, reference_date)
         
-        # Count questions, statements
         total_questions = 0
         total_statements = 0
         sentiment_list = []
@@ -206,8 +191,7 @@ def build_feature_data(user_messages, sentiment_pipeline):
         
         avg_sentiment = np.mean(sentiment_list) if sentiment_list else 0.0
 
-        # Mock label: if user hasn't messaged in > 2 days, label them "drop off" = 1, else 0
-        # (In real usage, you'd get the label from actual churn data)
+        # Mock label: if user hasn't posted in >2 days => drop_off=1, else 0
         drop_off_label = 1 if gap_days > 2 else 0
 
         rows.append({
@@ -287,5 +271,47 @@ if selected_user:
     st.write(f"**Average Sentiment**: {user_row['average_sentiment']:.2f}")
     st.write(f"**Drop-Off Probability**: {dropoff_prob*100:.2f}%")
 
+    # -----------------------------------------
+    # 5) Advice Section
+    # -----------------------------------------
+    st.markdown("### Advice to Reduce Drop-Off Risk")
+    advice_points = []
+
+    # Simple logic to generate 2–3 suggestions:
+
+    # 1) Sentiment advice
+    if user_row["average_sentiment"] < 0:
+        advice_points.append(
+            "Your messages show a predominantly **negative sentiment**. "
+            "Consider reaching out for support or talking to an advisor. "
+            "Positive interaction can boost your engagement."
+        )
+
+    # 2) Encouraging more frequent participation
+    if user_row["days_since_last_message"] > 1:
+        advice_points.append(
+            "You haven't posted in the channel for a while. "
+            "Try to participate more frequently—ask questions or share insights. "
+            "Consistency can help you stay connected."
+        )
+    
+    # 3) Asking more questions vs. statements
+    if user_row["total_questions"] == 0:
+        advice_points.append(
+            "It looks like you're not asking any questions. "
+            "Asking questions is a great way to learn, engage with peers, "
+            "and stay active in the conversation!"
+        )
+
+    # If we didn't get any advice from the above, we can add a general one:
+    if not advice_points:
+        advice_points.append(
+            "Great job staying active! Keep an eye on your sentiment and engagement over time."
+        )
+
+    # Display bullet points
+    for idx, tip in enumerate(advice_points, 1):
+        st.markdown(f"**{idx}. {tip}**")
+
 st.write("---")
-st.write("*Note: This is a toy example with mocked 'drop_off' labels.*")
+st.write("*Note: This is a demo with mocked 'drop_off' labels. In production, you would use real churn data.*")
